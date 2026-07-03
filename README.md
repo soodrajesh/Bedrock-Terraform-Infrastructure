@@ -1,10 +1,12 @@
 # Bedrock Terraform Infrastructure
 
+![CI](https://github.com/soodrajesh/Bedrock-Terraform-Infrastructure/actions/workflows/ci.yml/badge.svg)
+
 Terraform config for setting up basic access to Amazon Bedrock: an IAM policy scoped to `bedrock:InvokeModel` and friends, an S3 bucket to hold model invocation logs, and a role that Bedrock can assume to deliver those logs. There's also a small bash script, `invoke_claude.sh`, that calls Claude 3 Haiku on Bedrock through the AWS CLI, which is how I've actually been testing this - there's no application code here, just infrastructure plus a smoke-test script.
 
 This started as a way to get Bedrock access provisioned repeatably instead of clicking through the console, and to have something scriptable to sanity-check that IAM permissions and model access were set up correctly after each change.
 
-There's no CI pipeline. There's no `.github/workflows` directory in this repo, so `terraform plan`/`terraform apply` are run manually from a workstation with the right AWS credentials. That's fine for a single-account personal setup like this; it wouldn't be fine for anything with more than one contributor.
+There is a CI pipeline now ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), but it's a linting/validation gate, not a deploy pipeline: it runs `terraform fmt -check`, `terraform init -backend=false` + `terraform validate`, `shellcheck` against every `.sh` file, and a soft-fail `checkov` static analysis pass. None of that needs AWS credentials and none of it touches real infrastructure - `terraform plan`/`terraform apply` are still run manually from a workstation with the right AWS credentials. That's fine for a single-account personal setup like this; it wouldn't be fine for anything with more than one contributor.
 
 ## Architecture
 
@@ -28,7 +30,7 @@ The `bedrock_execution_role` is trusted only by `bedrock.amazonaws.com` - it's b
 
 ## Known gaps
 
-No CI: there's no GitHub Actions workflow, so `terraform fmt`/`validate`/`plan` are not checked automatically on changes - it's whatever I remember to run by hand.
+CI validates and lints, it doesn't deploy: the GitHub Actions workflow runs `terraform fmt -check`, `terraform init -backend=false` + `terraform validate`, `shellcheck` on the shell scripts, and a soft-fail `checkov` scan on every push/PR to `main`. It catches formatting drift, HCL syntax errors, shell script bugs, and flags (but doesn't block on) security findings like the wildcard IAM resource above. It does not run `terraform plan` or `apply`, needs no AWS credentials, and never touches real infrastructure - that part is still manual, by design, for a single-account personal setup.
 
 No remote backend: there's no `backend` block in `main.tf`, so state is local. No locking, no shared state, no history if the local `.tfstate` is lost.
 
@@ -44,6 +46,7 @@ No explicit server-side encryption configuration on the bucket - it relies on S3
 
 ```
 .
+├── .github/workflows/ci.yml  # terraform fmt/validate, shellcheck, checkov (soft-fail)
 ├── .gitignore          # ignores .terraform/, state files, tfvars, lock file
 ├── README.md
 ├── main.tf             # S3 log bucket, IAM policy/role for Bedrock access
