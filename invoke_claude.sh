@@ -18,7 +18,7 @@ EOL
 
 # Print the request for debugging
 echo "=== Sending Request ==="
-cat /tmp/claude_request.json | jq .
+jq . /tmp/claude_request.json
 echo "====================="
 
 # Invoke Claude 3 Haiku model using file input
@@ -38,7 +38,7 @@ rm -f /tmp/claude_request.json
 # Display the output
 if [ -f "output.json" ]; then
   echo -e "\n=== Model Response ==="
-  cat output.json | jq -r '.content[0].text'
+  jq -r '.content[0].text' output.json
   echo "====================="
 else
   echo -e "\nError: Failed to generate output. Check the request and try again."
