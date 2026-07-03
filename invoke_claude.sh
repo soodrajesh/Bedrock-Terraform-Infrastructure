@@ -46,6 +46,9 @@ else
   # Run a debug command to check Bedrock access
   echo -e "\n=== Debugging Information ==="
   echo "Checking AWS Bedrock access..."
+  # shellcheck disable=SC2016 # single quotes are intentional: this is a JMESPath
+  # query for --query, and the backticks are literal JMESPath syntax, not shell
+  # command substitution - it must not expand.
   aws bedrock list-foundation-models \
     --query 'modelSummaries[?starts_with(modelId, `anthropic.`)].{modelId: modelId, status: modelLifecycle.status, onDemand: modelLifecycle.onDemandSupported}' \
     --output table \
@@ -63,5 +66,5 @@ else
   echo "Model ID: anthropic.claude-3-haiku-20240307-v1:0"
   
   echo -e "\nFor more detailed debugging, run:"
-  echo "  aws --debug bedrock-runtime invoke-model \\\n    --model-id anthropic.claude-3-haiku-20240307-v1:0 \\\n    --content-type \"application/json\" \\\n    --accept \"application/json\" \\\n    --body file:///tmp/claude_request.json \\\n    output.json \\\n    --profile raj-private \\\n    --region eu-west-1"
+  printf '  aws --debug bedrock-runtime invoke-model \\\n    --model-id anthropic.claude-3-haiku-20240307-v1:0 \\\n    --content-type "application/json" \\\n    --accept "application/json" \\\n    --body file:///tmp/claude_request.json \\\n    output.json \\\n    --profile raj-private \\\n    --region eu-west-1\n'
 fi

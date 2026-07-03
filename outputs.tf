@@ -15,7 +15,7 @@ output "bedrock_execution_role_arn" {
 
 output "next_steps" {
   description = "Next steps to use Amazon Bedrock"
-  value = <<EOT
+  value       = <<EOT
 
   Next steps:
   1. Run 'terraform init' to initialize the Terraform configuration
