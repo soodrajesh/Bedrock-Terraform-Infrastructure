@@ -1,184 +1,84 @@
-# Amazon Bedrock Terraform Setup
+# Bedrock Terraform Infrastructure
 
-This Terraform configuration sets up Amazon Bedrock with the necessary IAM roles, S3 bucket for logs, and model invocation permissions.
+Terraform config for setting up basic access to Amazon Bedrock: an IAM policy scoped to `bedrock:InvokeModel` and friends, an S3 bucket to hold model invocation logs, and a role that Bedrock can assume to deliver those logs. There's also a small bash script, `invoke_claude.sh`, that calls Claude 3 Haiku on Bedrock through the AWS CLI, which is how I've actually been testing this - there's no application code here, just infrastructure plus a smoke-test script.
 
-## Table of Contents
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-- [Testing Bedrock Access](#testing-bedrock-access)
-- [Invoking Models](#invoking-models)
-- [Example: Using Claude v2](#example-using-claude-v2)
-- [Clean Up](#clean-up)
-- [Troubleshooting](#troubleshooting)
-- [Security](#security)
-- [Contributing](#contributing)
-- [License](#license)
+This started as a way to get Bedrock access provisioned repeatably instead of clicking through the console, and to have something scriptable to sanity-check that IAM permissions and model access were set up correctly after each change.
 
-## Features
+There's no CI pipeline. There's no `.github/workflows` directory in this repo, so `terraform plan`/`terraform apply` are run manually from a workstation with the right AWS credentials. That's fine for a single-account personal setup like this; it wouldn't be fine for anything with more than one contributor.
 
-- Creates IAM roles and policies for Bedrock access
-- Sets up S3 bucket for model invocation logs
-- Configures secure access controls and permissions
-- Easy deployment and cleanup with Terraform
+## Architecture
 
-**Note:** Bedrock model invocation logging must be enabled via the AWS Console or CLI. Terraform cannot enable logging for Bedrock models directly; it only provisions the S3 bucket for logs.
+```mermaid
+flowchart LR
+    subgraph tf["Terraform-managed"]
+        Policy["IAM Policy: bedrock_access<br/>bedrock:InvokeModel, InvokeModelWithResponseStream,<br/>ListFoundationModels (Resource *)<br/>s3:PutObject/GetObject on logs bucket"]
+        Role["IAM Role: bedrock_execution_role<br/>trust policy: bedrock.amazonaws.com"]
+        Bucket["S3 Bucket: bedrock_logs<br/>ownership controls + public access block"]
+        Role -- attached policy --> Policy
+        Policy -- scoped to --> Bucket
+    end
 
-## Prerequisites
+    CLI["invoke_claude.sh<br/>AWS CLI, IAM profile"] -- "bedrock-runtime:InvokeModel<br/>(uses the CLI profile's own credentials)" --> Bedrock["Amazon Bedrock<br/>anthropic.claude-3-haiku"]
+    Bedrock -. "model invocation logging<br/>(configured manually, not by this repo)" .-> Bucket
+```
 
-- [AWS CLI](https://aws.amazon.com/cli/) installed and configured with profile `raj-private`
-- [Terraform](https://www.terraform.io/downloads.html) 1.0.0 or later
-- AWS account with Bedrock access enabled
-- Sufficient IAM permissions to create resources
+The IAM policy grants `bedrock:InvokeModel` on `Resource = "*"`. Foundation model ARNs are AWS-managed, not customer resources, so this could be tightened to the specific Anthropic model ARNs actually in use (just Claude 3 Haiku, per `invoke_claude.sh`), but I left it wildcarded so I could try other models from the console without touching Terraform. It's a deliberate tradeoff, not an oversight, but it is broader than it needs to be for what's actually being invoked.
 
-## Project Structure
+The `bedrock_execution_role` is trusted only by `bedrock.amazonaws.com` - it's built for the case where Bedrock itself assumes a role to deliver invocation logs to S3, not for an EC2 instance, Lambda function, or the CLI to assume. In practice, `invoke_claude.sh` doesn't assume this role at all; it calls `bedrock-runtime invoke-model` directly using whatever IAM user/profile is active locally. So the policy and role provisioned here are not actually wired into the one thing in this repo that calls Bedrock - that's a real gap between what's declared and what's used, called out again below. There's also no VPC endpoint for Bedrock; calls go over the public AWS API endpoint, so there's no network-level boundary here, only IAM.
+
+## Known gaps
+
+No CI: there's no GitHub Actions workflow, so `terraform fmt`/`validate`/`plan` are not checked automatically on changes - it's whatever I remember to run by hand.
+
+No remote backend: there's no `backend` block in `main.tf`, so state is local. No locking, no shared state, no history if the local `.tfstate` is lost.
+
+The IAM role and policy aren't actually consumed by `invoke_claude.sh`. The script authenticates with the CLI profile directly; the Terraform-provisioned role/policy pair would only matter if something were configured to assume `bedrock_execution_role` (e.g. Bedrock model invocation logging), and that configuration isn't done here - the code comment in `main.tf` notes logging has to be turned on separately via console or CLI.
+
+`variables.tf` defaults `aws_profile` to `raj-private`, a personal AWS CLI profile name. Anyone else running this needs to override it with `-var` or a `.tfvars` file (the latter is gitignored here on purpose).
+
+The S3 bucket has `force_destroy = true` and no versioning or lifecycle policy, so a `terraform destroy` silently drops any logs in it, and there's no cost control on log growth.
+
+No explicit server-side encryption configuration on the bucket - it relies on S3's account/region defaults rather than a declared KMS or SSE-S3 setting.
+
+## Project structure
 
 ```
 .
-├── .gitignore           # Specifies intentionally untracked files to ignore
-├── README.md            # This documentation file
-├── main.tf              # Main Terraform configuration
-├── variables.tf         # Variable definitions
-└── outputs.tf           # Output values and next steps
+├── .gitignore          # ignores .terraform/, state files, tfvars, lock file
+├── README.md
+├── main.tf             # S3 log bucket, IAM policy/role for Bedrock access
+├── variables.tf        # region, AWS profile, project name, tags
+├── outputs.tf          # role ARN, bucket name, a printed "next steps" block
+├── invoke_claude.sh    # AWS CLI smoke test against Claude 3 Haiku on Bedrock
+└── claude_prompt.json  # sample request body used when testing manually
 ```
 
-## Getting Started
+## How to run this
 
-1. **Clone the repository** (if not already done):
-   ```bash
-   git clone <repository-url>
-   cd aws-bedrock-terraform
-   ```
-
-2. **Initialize Terraform**:
-   ```bash
-   terraform init
-   ```
-
-3. **Review the execution plan**:
-   ```bash
-   terraform plan
-   ```
-
-4. **Apply the configuration**:
-   ```bash
-   terraform apply -auto-approve
-   ```
-
-5. **Note the outputs** which include important information like the IAM role ARN and S3 bucket name.
-
-## Testing Bedrock Access
-
-After successful deployment, verify access to Bedrock by listing available foundation models:
+Prerequisites: an AWS account with model access to Anthropic Claude models requested and approved in the Bedrock console for the target region (this is an AWS-side manual step, Terraform can't do it), the AWS CLI configured with a profile that has permission to create IAM roles/policies and S3 buckets, and Terraform >= 1.0.0.
 
 ```bash
-aws bedrock list-foundation-models \
-  --profile raj-private \
-  --region eu-west-1 \
-  --query 'modelSummaries[*].modelId' \
-  --output table
+terraform init
+terraform plan
+terraform apply
 ```
 
-## Invoking Models
+Override the defaults instead of editing `variables.tf` directly, e.g.:
 
-### Using the Provided Bash Script (`invoke_claude.sh`)
+```bash
+terraform apply -var="aws_profile=your-profile" -var="aws_region=eu-west-1"
+```
 
-You can quickly test the Anthropic Claude model via Amazon Bedrock using the included `invoke_claude.sh` script. This script:
-- Builds a sample prompt (see `claude_prompt.json` for structure)
-- Invokes the Claude 3 Haiku model using the AWS CLI
-- Prints the model response or troubleshooting tips if the call fails
+To try the Bedrock call once the policy/role exist:
 
-**Usage:**
 ```bash
 bash invoke_claude.sh
 ```
-By default, the script uses the profile and region set in `variables.tf`. To use different values, edit the script or export environment variables before running.
 
----
+This invokes `anthropic.claude-3-haiku-20240307-v1:0` directly via `aws bedrock-runtime invoke-model` using the profile/region hardcoded near the top of the script (edit those if you're not using `raj-private`/`eu-west-1`), and prints the response text.
 
-To invoke a model, you'll need to know its model ID. Here's a general command structure:
-
-```bash
-aws bedrock invoke-model \
-  --model-id MODEL_ID \
-  --content-type "application/json" \
-  --body '{"prompt":"Your prompt here"}' \
-  output.json \
-  --profile raj-private \
-  --region eu-west-1
-```
-
-## Example: Using Claude v2
+To tear down:
 
 ```bash
-# Create a prompt file
-cat > claude_prompt.json << 'EOL'
-{
-  "prompt": "\n\nHuman: Explain quantum computing in simple terms\n\nAssistant:",
-  "max_tokens_to_sample": 500,
-  "temperature": 0.5,
-  "top_k": 250,
-  "top_p": 0.999,
-  "stop_sequences": ["\n\nHuman:"],
-  "anthropic_version": "bedrock-2023-05-31"
-}
-EOL
-
-# Invoke Claude v2
-aws bedrock invoke-model \
-  --model-id anthropic.claude-v2 \
-  --content-type "application/json" \
-  --body file://claude_prompt.json \
-  output.json \
-  --profile raj-private \
-  --region eu-west-1
-
-# View the response
-cat output.json | jq -r '.completion'
+terraform destroy
 ```
-
-## Clean Up
-
-To remove all resources created by this configuration:
-
-```bash
-terraform destroy -auto-approve
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Insufficient Permissions**:
-   - Ensure your AWS user has the necessary permissions to create IAM roles, S3 buckets, and Bedrock resources.
-   - The IAM user needs at least these permissions:
-     - `bedrock:*`
-     - `iam:*`
-     - `s3:*`
-
-2. **Region Availability**:
-   - Verify that Amazon Bedrock is available in your selected region (eu-west-1).
-   - Check the [AWS Regional Services List](https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/).
-
-3. **Rate Limiting**:
-   - Bedrock has rate limits. If you encounter throttling errors, implement exponential backoff in your code.
-
-## Security
-
-- The S3 bucket for logs is configured with strict access controls.
-- IAM policies follow the principle of least privilege.
-- Sensitive data should never be committed to version control.
-- The IAM role is set up for Bedrock service by default. If you wish to use this role with other services (e.g., Lambda, EC2), you may need to adjust the trust policy in `main.tf` accordingly.
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

@@ -1,6 +1,6 @@
 output "bedrock_status" {
   description = "Confirmation that Bedrock has been configured"
-  value       = "✅ Amazon Bedrock has been successfully configured in ${var.aws_region} with profile ${var.aws_profile}"
+  value       = "Amazon Bedrock access has been configured in ${var.aws_region} with profile ${var.aws_profile}"
 }
 
 output "bedrock_logging_bucket" {
@@ -17,7 +17,7 @@ output "next_steps" {
   description = "Next steps to use Amazon Bedrock"
   value = <<EOT
 
-  🚀 Next Steps:
+  Next steps:
   1. Run 'terraform init' to initialize the Terraform configuration
   2. Run 'terraform plan' to see the execution plan
   3. Run 'terraform apply' to apply the configuration

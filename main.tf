@@ -76,7 +76,12 @@ resource "aws_iam_policy" "bedrock_access" {
   })
 }
 
-# Example IAM role (you can attach this to your EC2, Lambda, etc.)
+# Role trusted by the Bedrock service itself (e.g. for model invocation
+# logging delivery to S3). This is not a role for an EC2 instance, Lambda
+# function, or other client to assume when calling bedrock:InvokeModel -
+# those callers need their own IAM identity granted the bedrock_access
+# policy below, or need to assume a role whose trust policy names them
+# (ec2.amazonaws.com, lambda.amazonaws.com, etc.) instead of bedrock.amazonaws.com.
 resource "aws_iam_role" "bedrock_execution_role" {
   name = "${var.project_name}-bedrock-execution-role"
   
